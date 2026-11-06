@@ -2526,9 +2526,12 @@ const RbMegaChain = (function () {
         // user turns Rig Builder OFF, nothing from it loads into the shared
         // engine — their own Audio-menu chain is left untouched.
         if (window.__rbEnabled === false) return false;
-        // Chain preloader is ALWAYS on otherwise (the Setup toggle was removed).
-        // The DevTools kill-switch `window.__rbMegaChain = false` still works
-        // as an escape hatch for debugging a misbehaving song / weak PC.
+        // Per-song tones are opt-in (Gear → Rig Builder → "Per-song tones",
+        // persisted as mega_chain_mode, default OFF): each song's generated rig
+        // only replaces the player's own chain when they ask for it. Until the
+        // setting has loaded, treat it as off. The DevTools kill-switch
+        // `window.__rbMegaChain = false` still works as an escape hatch.
+        if (window.__rbMegaChainSetting !== true) return false;
         return window.__rbMegaChain !== false;
     }
 
@@ -19785,6 +19788,7 @@ async function rbLoadSettings() {
     // sees it even if the user never opens Settings. rbLoadSettings is
     // called from rbInit so this runs at page-load.
     window.__rbMegaChainSetting = !!s.mega_chain_mode;
+    { const mc = document.getElementById('rb-mega-chain-mode'); if (mc) mc.checked = !!s.mega_chain_mode; }
     // Master Rig Builder ON/OFF (Gear toggle). Default ON when the key is absent.
     if (typeof s.rig_builder_enabled !== 'undefined') window.__rbEnabled = !!s.rig_builder_enabled;
     try { rbUpdateRigBuilderEnabledUI(); } catch (_) {}

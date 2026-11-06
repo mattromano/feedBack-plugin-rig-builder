@@ -409,7 +409,11 @@ _DEFAULT_SETTINGS = {
     # reload + clearChain on every switch. Memory cost is a few MB per
     # extra NAM but on M-series Macs it's a clear win. Users on weak
     # x86 hardware can flip it off in Settings.
-    "mega_chain_mode": True,
+    # Per-song tones are OPT-IN (Gear → Rig Builder → "Per-song tones"): the
+    # generated per-song rigs replaced the player's own tone on every song by
+    # default, which sounded worse than a good chain for most players. An
+    # existing settings file that already stores True keeps it on.
+    "mega_chain_mode": False,
     # When on, the user's default tone (assembled in Gear → Default tone) is
     # loaded into the engine at startup and re-loaded whenever they leave a
     # song or stop a Listen preview — so the idle/menu sound is the chosen
@@ -8580,7 +8584,7 @@ def setup(app, context):
             "aggressive": s.get("aggressive", False),
             "curated_only": s.get("curated_only", False),
             "preferred_size": s.get("preferred_size", "standard"),
-            "mega_chain_mode": s.get("mega_chain_mode", True),
+            "mega_chain_mode": s.get("mega_chain_mode", False),
             "default_tone_enabled": bool(s.get("default_tone_enabled", False)),
             "rig_builder_enabled": bool(s.get("rig_builder_enabled", True)),
             # "Play a specific tone" override — MUST be returned here or the
