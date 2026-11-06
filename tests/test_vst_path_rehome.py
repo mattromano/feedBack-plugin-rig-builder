@@ -148,3 +148,85 @@ def test_rehome_is_noop_without_vst_path_column(tmp_path):
     routes._conn = conn
     # Must not raise even though vst_path does not exist yet.
     routes._migrate_rehome_bundled_vst_paths()
+
+
+def _make_bundle(root: Path, rel: str) -> None:
+    (root / rel).mkdir(parents=True)  # a .vst3 is a bundle directory
+
+
+def _norm(p: Path) -> str:
+    return str(p).replace("\\", "/")
+
+
+def test_rehome_prefers_download_root_when_plugin_dir_has_no_vst(tmp_path):
+    # Packaged builds ship without <plugin>/vst; the packs live in the
+    # downloaded root under the config dir. A tone saved by an older build
+    # must land THERE, not on the empty plugin dir (every song tone broke).
+    routes = _routes_module()
+    plugin_dir = tmp_path / "app" / "resources" / "slopsmith" / "plugins" / "rig_builder"
+    plugin_dir.mkdir(parents=True)
+    routes._plugin_dir = plugin_dir
+    routes._config_dir = tmp_path / "config"
+    dl_root = routes._downloaded_vst_root()
+    _make_bundle(dl_root, "pedals/GE-8.vst3")
+
+    conn = _make_conn()
+    routes._conn = conn
+    stale = r"C:\old\win-unpacked\resources\slopsmith\plugins\rig_builder\vst\pedals\GE-8.vst3"
+    pid = _insert(conn, stale)
+
+    routes._migrate_rehome_bundled_vst_paths()
+
+    assert _path_of(conn, pid) == _norm(dl_root / "pedals" / "GE-8.vst3")
+
+
+def test_rehome_prefers_plugin_dir_when_both_roots_have_the_bundle(tmp_path):
+    routes = _routes_module()
+    plugin_dir = tmp_path / "rig_builder"
+    routes._plugin_dir = plugin_dir
+    routes._config_dir = tmp_path / "config"
+    _make_bundle(plugin_dir / "vst", "amps/DSL100.vst3")
+    _make_bundle(routes._downloaded_vst_root(), "amps/DSL100.vst3")
+
+    conn = _make_conn()
+    routes._conn = conn
+    pid = _insert(conn, "/somewhere/else/plugins/rig_builder/vst/amps/DSL100.vst3")
+
+    routes._migrate_rehome_bundled_vst_paths()
+
+    assert _path_of(conn, pid) == _expect(plugin_dir, "amps", "DSL100.vst3")
+
+
+def test_rehome_moves_download_root_path_to_plugin_dir_copy(tmp_path):
+    # A path already under the download root is recognised as bundled too:
+    # if only the plugin dir has that bundle now, follow it there.
+    routes = _routes_module()
+    plugin_dir = tmp_path / "rig_builder"
+    routes._plugin_dir = plugin_dir
+    routes._config_dir = tmp_path / "config"
+    _make_bundle(plugin_dir / "vst", "pedals/FM101.vst3")
+    dl_path = _norm(routes._downloaded_vst_root() / "pedals" / "FM101.vst3")
+
+    conn = _make_conn()
+    routes._conn = conn
+    pid = _insert(conn, dl_path)
+
+    routes._migrate_rehome_bundled_vst_paths()
+
+    assert _path_of(conn, pid) == _expect(plugin_dir, "pedals", "FM101.vst3")
+
+
+def test_rehome_falls_back_to_plugin_dir_when_no_root_has_it(tmp_path):
+    routes = _routes_module()
+    plugin_dir = tmp_path / "rig_builder"
+    routes._plugin_dir = plugin_dir
+    routes._config_dir = tmp_path / "config"
+    routes._downloaded_vst_root().mkdir(parents=True)
+
+    conn = _make_conn()
+    routes._conn = conn
+    pid = _insert(conn, "/gone/plugins/rig_builder/vst/racks/LNG.vst3")
+
+    routes._migrate_rehome_bundled_vst_paths()
+
+    assert _path_of(conn, pid) == _expect(plugin_dir, "racks", "LNG.vst3")
