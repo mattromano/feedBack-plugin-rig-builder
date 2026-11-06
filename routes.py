@@ -1080,6 +1080,28 @@ def _migrate_rehome_bundled_vst_paths() -> None:
     vst_root = _plugin_dir / "vst"
     root_norm = str(vst_root).replace("\\", "/")
     markers = ("/plugins/rig_builder/vst/", "/plugins/nam_rig_builder/vst/")
+    # Packaged builds ship WITHOUT <plugin>/vst (the packs download on demand
+    # into the writable _downloaded_vst_root()), so blindly re-homing to the
+    # plugin dir pointed every tone at a folder that doesn't exist — each app
+    # update or rebuild silently dropped every pedal/amp/rack VST from every
+    # song tone. Re-home each path to the first root that actually HAS the
+    # bundle (plugin dir, then the download root); only when neither does, keep
+    # the old behaviour (plugin dir). Paths already under the download root are
+    # recognised too, so a tone can move back to a bundled copy and vice versa.
+    roots = [vst_root]
+    if _config_dir is not None:
+        roots.append(_downloaded_vst_root())
+    roots_norm = [str(r).replace("\\", "/") for r in roots]
+    _exists_cache: dict[tuple[int, str], bool] = {}
+
+    def _target_root(rel: str) -> str:
+        for i, r in enumerate(roots):
+            key = (i, rel)
+            if key not in _exists_cache:
+                _exists_cache[key] = (r / rel).exists()
+            if _exists_cache[key]:
+                return roots_norm[i]
+        return root_norm
     try:
         rows = conn.execute(
             "SELECT id, vst_path FROM preset_pieces "
@@ -1099,13 +1121,16 @@ def _migrate_rehome_bundled_vst_paths() -> None:
             continue
         norm = vp.replace("\\", "/")
         rel = None
-        if norm.startswith(root_norm + "/"):
-            # Already anchored at the live plugin dir — but if the STORED value
-            # still uses '\' (a Windows-authored row), fall through so we rewrite
-            # it to forward slashes; otherwise the slash-only rename/subdir
-            # migrations below still can't match its flat/renamed tail.
-            rel = norm[len(root_norm) + 1:]
-        else:
+        for rn in roots_norm:
+            if norm.startswith(rn + "/"):
+                # Already anchored at a live root — but if the STORED value
+                # still uses '\' (a Windows-authored row), fall through so we
+                # rewrite it to forward slashes; otherwise the slash-only
+                # rename/subdir migrations below still can't match its
+                # flat/renamed tail.
+                rel = norm[len(rn) + 1:]
+                break
+        if rel is None:
             for mk in markers:
                 idx = norm.find(mk)
                 if idx != -1:
@@ -1116,7 +1141,7 @@ def _migrate_rehome_bundled_vst_paths() -> None:
         # Emit a forward-slash path (not str(vst_root / rel), which would use
         # '\' on Windows) so the slash-only segment rewrites that run after this
         # can still match and repair a flat/renamed tail.
-        new_path = root_norm + "/" + rel
+        new_path = _target_root(rel) + "/" + rel
         if new_path != vp:
             conn.execute(
                 "UPDATE preset_pieces SET vst_path = ? WHERE id = ?",
@@ -1125,7 +1150,8 @@ def _migrate_rehome_bundled_vst_paths() -> None:
             fixed += 1
     if fixed:
         conn.commit()
-        log.info("re-homed %d bundled VST path(s) to %s", fixed, str(vst_root))
+        log.info("re-homed %d bundled VST path(s) to %s", fixed,
+                 " / ".join(str(r) for r in roots))
 
 
 def _migrate_output_gain_to_unity() -> None:
