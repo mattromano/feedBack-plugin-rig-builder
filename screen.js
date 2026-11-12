@@ -136,6 +136,9 @@ async function rbVstPollUntilDone(el) {
 window.__rbTest = {
     rbFormatBytes, rbRigSaveAchievement, rbHasDownloadedTone,
     RB_ACHIEVEMENTS, RB_VST_WELCOME_KEY, RB_TONE_DOWNLOADED_KEY,
+    // Function declarations are hoisted, so these resolve though defined later.
+    rbRenderInstMenuRigTones, rbRegisterInstMenuRigTones, rbLoadOverrideTone,
+    state: () => rbState,
 };
 
 function rbScopeCss(css) {
@@ -7360,6 +7363,14 @@ async function rbLoadOverrideTone() {
     if (!name) { try { return !!(await rbReloadDefaultTone()); } catch (_) { return false; } }
     const t = (rbState.savedTones || []).find(x => x.name === name);
     if (!t || t.id == null) { try { return !!(await rbReloadDefaultTone()); } catch (_) { return false; } }
+    return rbLoadSavedTone(api, t, 'tone override');
+}
+
+// Load one saved Studio tone ({id, name}) into the engine now. Shared by the
+// override path above and the guitar-dropdown "Rig tones" section. True only
+// when it actually loaded.
+async function rbLoadSavedTone(api, t, what) {
+    if (!api || !t || t.id == null) return false;
     if (typeof rbLoadNativePresetPayload !== 'function') return false;
     try {
         // Use the warmed payload when present (background prefetch, song-independent)
@@ -7385,8 +7396,67 @@ async function rbLoadOverrideTone() {
         try { await rbStudioFinishMonitorLoad(api, payload.native_preset.chain); } catch (_) {}
         rbState._defaultToneActive = true;
         return true;
-    } catch (e) { console.warn('[rig_builder] tone override load failed:', e); return false; }
+    } catch (e) { console.warn(`[rig_builder] ${what || 'saved tone'} load failed:`, e); return false; }
 }
+
+// ── Guitar dropdown: saved rig tones ─────────────────────────────────────────
+// The core's v3 guitar dropdown (static/v3/badges.js) takes extra sections via
+// v3Badges.registerMenuSection. This lists your saved Studio tones as one-click
+// loads. Runs under the desktop's tone chain lock when present, and not while a
+// song is loading (its chain rebuild would replace the pick anyway).
+let _rbInstMenuLoading = null;
+function rbInstMenuSongLoading() {
+    return Date.now() < (window._aeSongTransitionUntil || 0);
+}
+function rbRenderInstMenuRigTones(slot, ctx) {
+    if (!rbState._savedTonesLoaded) {
+        slot.innerHTML = '';
+        if (typeof rbStudioLoadSavedTones === 'function') {
+            rbStudioLoadSavedTones().then(() => { if (rbState._savedTonesLoaded) ctx.refresh(); }).catch(() => {});
+        }
+        return;
+    }
+    const tones = (rbState.savedTones || []).filter(t => t && t.id != null && t.name);
+    if (!tones.length || !rbAudioApi()) { slot.innerHTML = ''; return; }
+    slot.innerHTML = '<div class="pt-3 border-t border-fb-border/40">' +
+        '<div class="text-[0.625rem] uppercase tracking-wider text-fb-textDim mb-1">Rig tones</div>' +
+        '<div class="flex flex-wrap gap-1">' +
+        tones.map(t => {
+            const busy = t.name === _rbInstMenuLoading;
+            return '<button type="button" data-rb-tone="' + rbEsc(t.name) + '" title="Load ' + rbEsc(t.name) + '" ' +
+                'class="px-2 py-1 rounded-md text-xs ' + (busy ? 'bg-fb-primary text-white' : 'bg-gray-800/50 text-fb-textDim hover:text-fb-text') + '"' +
+                (_rbInstMenuLoading ? ' disabled' : '') + '>' + rbEsc(busy ? t.name + '…' : t.name) + '</button>';
+        }).join('') + '</div></div>';
+    slot.querySelectorAll('[data-rb-tone]').forEach(b => b.addEventListener('click', async () => {
+        if (_rbInstMenuLoading) return;
+        const name = b.getAttribute('data-rb-tone');
+        const t = (rbState.savedTones || []).find(x => x.name === name);
+        if (!t) return;
+        if (rbInstMenuSongLoading()) { console.warn('[rig_builder] not loading a tone during a song load:', name); return; }
+        _rbInstMenuLoading = name;
+        ctx.refresh();
+        try {
+            const lock = typeof window._aeWithToneChainLock === 'function' ? window._aeWithToneChainLock : (job => job());
+            const ok = await lock(() => rbLoadSavedTone(rbAudioApi(), t, 'dropdown tone'));
+            if (!ok) console.warn('[rig_builder] dropdown tone did not load:', name);
+        } finally {
+            _rbInstMenuLoading = null;
+            ctx.refresh();
+        }
+    }));
+}
+// Registering can render the section at once; wait until this whole script has
+// run so the consts the loader uses further down are initialised.
+function rbRegisterInstMenuRigTones() {
+    const section = { id: 'rig-builder-tones', render: rbRenderInstMenuRigTones, order: 30 };
+    if (window.v3Badges && typeof window.v3Badges.registerMenuSection === 'function') {
+        window.v3Badges.registerMenuSection(section.id, section.render, section);
+    } else {
+        window._v3BadgesPendingSections = window._v3BadgesPendingSections || [];
+        window._v3BadgesPendingSections.push(section);
+    }
+}
+setTimeout(rbRegisterInstMenuRigTones, 0);
 
 // Load the override tone for a song, ONCE per (song, tone) — idempotent so the
 // bundle's per-tone-change re-apply doesn't cause an audible reload every section.
